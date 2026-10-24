@@ -79,6 +79,17 @@ static CGFloat KSFloat(NSString *key, CGFloat def) {
     return def;
 }
 
+// 整数偏好（toolbarStyle：0=图版图标 / 1=文字版中文词）
+static NSInteger KSInt(NSString *key, NSInteger def) {
+    @try {
+        id v = KSCopyPref(key);
+        if (v == nil) return def;
+        if ([v isKindOfClass:[NSNumber class]]) return [v integerValue];
+        if ([v isKindOfClass:[NSString class]]) return [(NSString *)v integerValue];
+    } @catch (NSException *e) {}
+    return def;
+}
+
 static void KSSetPref(NSString *key, id value) {
     @try {
         NSString *p = ksPrefsFilePath();
@@ -214,15 +225,24 @@ static UIViewController *ksTopViewController(void) {
     } @catch (NSException *e) { return nil; }
 }
 
-static UIButton *ksMakeButton(NSString *sf, NSString *fallback, SEL action, id target, CGFloat iconSize) {
+// textLabel：文字版模式下显示的完整中文词（如「剪切」）；fallback：图版模式取不到 SF 图标时的单字回退
+static UIButton *ksMakeButton(NSString *sf, NSString *fallback, NSString *textLabel, SEL action, id target, CGFloat iconSize) {
     @try {
         UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:iconSize
                                                                                         weight:UIImageSymbolWeightRegular];
-        UIImage *img = [UIImage systemImageNamed:sf withConfiguration:cfg];
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        if (img) [b setImage:img forState:UIControlStateNormal];
-        else if (fallback.length) [b setTitle:fallback forState:UIControlStateNormal];
-        [b setTintColor:[UIColor labelColor]];
+        if (KSInt(@"toolbarStyle", 0) == 1 && textLabel.length) {
+            // 文字版：直接显示中文词
+            [b setTitle:textLabel forState:UIControlStateNormal];
+            b.titleLabel.font = [UIFont systemFontOfSize:iconSize];
+            [b setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
+        } else {
+            // 图版：优先 SF Symbols，取不到图标用单字回退
+            UIImage *img = [UIImage systemImageNamed:sf withConfiguration:cfg];
+            if (img) [b setImage:img forState:UIControlStateNormal];
+            else if (fallback.length) [b setTitle:fallback forState:UIControlStateNormal];
+            [b setTintColor:[UIColor labelColor]];
+        }
         b.contentEdgeInsets = UIEdgeInsetsMake(3, 5, 3, 5);
         [b addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
         return b;
@@ -479,6 +499,10 @@ static void ksActSelectAll(id s, SEL _c) {
 }
 static void ksActCut(id s, SEL _c) {
     @try { [[UIApplication sharedApplication] sendAction:@selector(cut:) to:nil from:nil forEvent:nil]; } @catch (NSException *e) {}
+}
+
+static void ksActCopy(id s, SEL _c) {
+    @try { [[UIApplication sharedApplication] sendAction:@selector(copy:) to:nil from:nil forEvent:nil]; } @catch (NSException *e) {}
 }
 static void ksActPaste(id s, SEL _c) {
     @try { [[UIApplication sharedApplication] sendAction:@selector(paste:) to:nil from:nil forEvent:nil]; } @catch (NSException *e) {}
@@ -1136,7 +1160,7 @@ static char kKSBtmKey;
 
         CGFloat spacing = KSFloat(@"toolbarSpacing", 4); // 图标间隔
         // 自定义顺序（面板「按钮排序」写入 toolbarOrder；非法/缺项按默认补齐）
-        NSArray *defOrder = @[@"showSelectAll", @"showCut", @"showPaste", @"showClipboard",
+        NSArray *defOrder = @[@"showSelectAll", @"showCut", @"showCopy", @"showPaste", @"showClipboard",
                               @"showPhrases", @"showCursor", @"showDismiss", @"showDeleteAll",
                               @"showQuickAction", @"showAI", @"showWenyan", @"showGlobe"];
         NSMutableArray *finalOrder = [NSMutableArray array];
@@ -1148,59 +1172,75 @@ static char kKSBtmKey;
         for (NSString *k in defOrder)
             if (![finalOrder containsObject:k]) [finalOrder addObject:k];
         // 重建签名：图标大小 + 图标间隔 + 顺序 + 全部功能开关，任一变化都重建整个工具栏
-        NSString *sig = [NSString stringWithFormat:@"%.1f|%.0f|%@|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d",
-            iconSize, spacing, [finalOrder componentsJoinedByString:@","],
-            KSBool(@"showSelectAll", YES), KSBool(@"showCut", YES), KSBool(@"showPaste", YES),
-            KSBool(@"showClipboard", YES), KSBool(@"showPhrases", YES), KSBool(@"showCursor", YES),
-            KSBool(@"showDismiss", YES), KSBool(@"showDeleteAll", YES), KSBool(@"showQuickAction", NO),
-            KSBool(@"showAI", NO), KSBool(@"showWenyan", NO), KSBool(@"showGlobe", YES)];
-        UIStackView *stack = (UIStackView *)[self viewWithTag:KS_TOOLBAR_TAG];
-        NSString *built = objc_getAssociatedObject(stack, &kKSBuiltSizeKey);
-        if (stack && (![built isKindOfClass:[NSString class]] || ![built isEqualToString:sig])) {
-            [stack removeFromSuperview];
-            stack = nil;
+        NSString *sig = [NSString stringWithFormat:@"%d|%.1f|%.0f|%@|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d",
+            KSInt(@"toolbarStyle", 0), iconSize, spacing, [finalOrder componentsJoinedByString:@","],
+            KSBool(@"showSelectAll", YES), KSBool(@"showCut", YES), KSBool(@"showCopy", YES),
+            KSBool(@"showPaste", YES), KSBool(@"showClipboard", YES), KSBool(@"showPhrases", YES),
+            KSBool(@"showCursor", YES), KSBool(@"showDismiss", YES), KSBool(@"showDeleteAll", YES),
+            KSBool(@"showQuickAction", NO), KSBool(@"showAI", NO), KSBool(@"showWenyan", NO),
+            KSBool(@"showGlobe", YES)];
+        UIScrollView *scroll = (UIScrollView *)[self viewWithTag:KS_TOOLBAR_TAG];
+        UIStackView *stack = nil;
+        if (scroll && scroll.subviews.count && [scroll.subviews.firstObject isKindOfClass:[UIStackView class]])
+            stack = (UIStackView *)scroll.subviews.firstObject;
+        NSString *built = objc_getAssociatedObject(scroll, &kKSBuiltSizeKey);
+        if (scroll && (![built isKindOfClass:[NSString class]] || ![built isEqualToString:sig])) {
+            [scroll removeFromSuperview];
+            scroll = nil;
         }
 
-        if (!stack) {
+        if (!scroll) {
+            scroll = [[UIScrollView alloc] init];
+            scroll.tag = KS_TOOLBAR_TAG;
+            scroll.translatesAutoresizingMaskIntoConstraints = NO;
+            scroll.showsHorizontalScrollIndicator = NO;
+            scroll.showsVerticalScrollIndicator = NO;
+            scroll.bounces = YES;
+            scroll.clipsToBounds = NO;
+            if (@available(iOS 11.0, *))
+                scroll.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+            [self addSubview:scroll];
+
             stack = [[UIStackView alloc] init];
-            stack.tag = KS_TOOLBAR_TAG;
             stack.axis = UILayoutConstraintAxisHorizontal;
-            stack.distribution = UIStackViewDistributionEqualSpacing;
+            stack.distribution = UIStackViewDistributionFill;
             stack.alignment = UIStackViewAlignmentCenter;
             stack.spacing = spacing;
             stack.translatesAutoresizingMaskIntoConstraints = NO;
-            [self addSubview:stack];
+            [scroll addSubview:stack];
 
             UIButton *b;
             for (NSString *k in finalOrder) {
                 if ([k isEqualToString:@"showSelectAll"] && KSBool(k, YES)) {
-                    b = ksMakeButton(@"selection.pin.in.out", @"全", @selector(ksActSelectAll), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"selection.pin.in.out", @"全", @"全选", @selector(ksActSelectAll), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showCut"] && KSBool(k, YES)) {
-                    b = ksMakeButton(@"scissors", @"剪", @selector(ksActCut), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"scissors", @"剪", @"剪切", @selector(ksActCut), self, iconSize); if (b) [stack addArrangedSubview:b];
+                } else if ([k isEqualToString:@"showCopy"] && KSBool(k, YES)) {
+                    b = ksMakeButton(@"doc.on.doc", @"复", @"复制", @selector(ksActCopy), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showPaste"] && KSBool(k, YES)) {
-                    b = ksMakeButton(@"doc.on.clipboard", @"粘", @selector(ksActPaste), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"doc.on.clipboard", @"粘", @"粘贴", @selector(ksActPaste), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showClipboard"] && KSBool(k, YES)) {
                     [stack addArrangedSubview:ksSeparator()];
-                    b = ksMakeButton(@"list.clipboard", @"历", @selector(ksActClipboard), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"list.clipboard", @"历", @"粘贴板", @selector(ksActClipboard), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showPhrases"] && KSBool(k, YES)) {
-                    b = ksMakeButton(@"text.quote", @"语", @selector(ksActPhrases), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"text.quote", @"语", @"短语", @selector(ksActPhrases), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showCursor"] && KSBool(k, YES)) {
                     [stack addArrangedSubview:ksSeparator()];
-                    b = ksMakeButton(@"arrow.left",  @"←", @selector(ksActCursorLeft),  self, iconSize); if (b) [stack addArrangedSubview:b];
-                    b = ksMakeButton(@"arrow.right", @"→", @selector(ksActCursorRight), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"arrow.left",  @"←", @"左移", @selector(ksActCursorLeft),  self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"arrow.right", @"→", @"右移", @selector(ksActCursorRight), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showDismiss"] && KSBool(k, YES)) {
                     [stack addArrangedSubview:ksSeparator()];
-                    b = ksMakeButton(@"keyboard.chevron.compact.down", @"收", @selector(ksActDismiss), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"keyboard.chevron.compact.down", @"收", @"键盘", @selector(ksActDismiss), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showDeleteAll"] && KSBool(k, YES)) {
                     [stack addArrangedSubview:ksSeparator()];
-                    b = ksMakeButton(@"trash", @"清", @selector(ksActDeleteAll), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"trash", @"清", @"全删", @selector(ksActDeleteAll), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showQuickAction"] && KSBool(k, NO)) {
                     [stack addArrangedSubview:ksSeparator()];
-                    b = ksMakeButton(@"rectangle.stack", @"切", @selector(ksActQuickLaunch), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"rectangle.stack", @"切", @"启动", @selector(ksActQuickLaunch), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showAI"] && KSBool(k, NO) && KSBool(@"aiEnabled", NO)) {
                     // AI 按钮：单击默认动作，长按弹功能菜单；总开关 aiEnabled 关闭时整个隐藏
                     [stack addArrangedSubview:ksSeparator()];
-                    b = ksMakeButton(@"sparkles", @"AI", @selector(ksActAI:), self, iconSize);
+                    b = ksMakeButton(@"sparkles", @"AI", @"AI", @selector(ksActAI:), self, iconSize);
                     if (b) {
                         UILongPressGestureRecognizer *lp =
                             [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ksAILongPress:)];
@@ -1210,22 +1250,36 @@ static char kKSBtmKey;
                     }
                 } else if ([k isEqualToString:@"showWenyan"] && KSBool(k, NO)) {
                     // 文言文按钮：复用 AI 管线，单字「文」做符号；未配置 AI 时按下会提示
-                    b = ksMakeButton(@"", @"文", @selector(ksActWenyan:), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"", @"文", @"文言文", @selector(ksActWenyan:), self, iconSize); if (b) [stack addArrangedSubview:b];
                 } else if ([k isEqualToString:@"showGlobe"] && KSBool(k, YES)) {
-                    b = ksMakeButton(@"globe", @"🌐", @selector(ksActGlobe), self, iconSize); if (b) [stack addArrangedSubview:b];
+                    b = ksMakeButton(@"globe", @"🌐", @"切换", @selector(ksActGlobe), self, iconSize); if (b) [stack addArrangedSubview:b];
                 }
             }
 
-            NSLayoutConstraint *cx  = [stack.centerXAnchor constraintEqualToAnchor:self.centerXAnchor constant:offX];
-            NSLayoutConstraint *btm = [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-lift];
-            cx.active = YES; btm.active = YES;
-            objc_setAssociatedObject(stack, &kKSBuiltSizeKey, sig, OBJC_ASSOCIATION_RETAIN);
-            objc_setAssociatedObject(stack, &kKSCXKey,  cx,  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(stack, &kKSBtmKey, btm, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            // 滚动容器约束：toolbar 包一层 UIScrollView，按钮多了可左右滑动
+            NSLayoutConstraint *cx  = [scroll.centerXAnchor constraintEqualToAnchor:self.centerXAnchor constant:offX];
+            NSLayoutConstraint *btm = [scroll.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-lift];
+            NSLayoutConstraint *hh  = [scroll.heightAnchor constraintEqualToConstant:(iconSize + 14)];
+            NSLayoutConstraint *ww  = [scroll.widthAnchor constraintEqualToAnchor:self.widthAnchor constant:-10];
+            cx.active = YES; btm.active = YES; hh.active = YES; ww.active = YES;
+            // stack 撑满 scroll 内容区；内容小于可视宽度时居中，超出时可滚动（从左侧开始）
+            [NSLayoutConstraint activateConstraints:@[
+                [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+                [stack.trailingAnchor constraintLessThanOrEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+                [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+                [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+            ]];
+            NSLayoutConstraint *scx = [stack.centerXAnchor constraintEqualToAnchor:scroll.centerXAnchor];
+            scx.priority = UILayoutPriorityDefaultLow; // 250：内容多时让位给 leading/trailing，从左侧开始
+            scx.active = YES;
+
+            objc_setAssociatedObject(scroll, &kKSBuiltSizeKey, sig, OBJC_ASSOCIATION_RETAIN);
+            objc_setAssociatedObject(scroll, &kKSCXKey,  cx,  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(scroll, &kKSBtmKey, btm, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         } else {
             // 已存在：只更新位置参数（实时跟随面板调整）
-            NSLayoutConstraint *cx  = objc_getAssociatedObject(stack, &kKSCXKey);
-            NSLayoutConstraint *btm = objc_getAssociatedObject(stack, &kKSBtmKey);
+            NSLayoutConstraint *cx  = objc_getAssociatedObject(scroll, &kKSCXKey);
+            NSLayoutConstraint *btm = objc_getAssociatedObject(scroll, &kKSBtmKey);
             cx.constant  = offX;
             btm.constant = -lift;
         }
@@ -1274,6 +1328,7 @@ static void ksPrefsChangedCB(CFNotificationCenterRef center, void *observer,
         struct { const char *name; IMP imp; const char *types; } methods[] = {
             {"ksActSelectAll",  (IMP)ksActSelectAll, "v@:"},
             {"ksActCut",        (IMP)ksActCut, "v@:"},
+            {"ksActCopy",       (IMP)ksActCopy, "v@:"},
             {"ksActPaste",      (IMP)ksActPaste, "v@:"},
             {"ksActCursorLeft", (IMP)ksActCursorLeft, "v@:"},
             {"ksActCursorRight",(IMP)ksActCursorRight, "v@:"},

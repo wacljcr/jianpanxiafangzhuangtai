@@ -87,10 +87,21 @@ static CGFloat KSFloat(NSString *key, CGFloat def) {
     return def;
 }
 
+// 整数偏好（toolbarStyle：0=图版图标 / 1=文字版中文词）
+static NSInteger KSInt(NSString *key, NSInteger def) {
+    @try {
+        id v = KSPrefDict()[key];
+        if (v == nil) return def;
+        if ([v isKindOfClass:[NSNumber class]]) return [v integerValue];
+        if ([v isKindOfClass:[NSString class]]) return [(NSString *)v integerValue];
+    } @catch (NSException *e) {}
+    return def;
+}
+
 #pragma mark - 实时预览 cell：固定键盘主体 + 实时工具栏（可拖动调位置）
 
 static NSArray *ksDefaultButtonOrder(void) {
-    return @[@"showSelectAll", @"showCut", @"showPaste", @"showClipboard",
+    return @[@"showSelectAll", @"showCut", @"showCopy", @"showPaste", @"showClipboard",
              @"showPhrases", @"showCursor", @"showDismiss", @"showDeleteAll",
              @"showQuickAction", @"showAI", @"showWenyan", @"showGlobe"];
 }
@@ -111,18 +122,19 @@ static NSArray *ksFinalButtonOrder(void) {
 }
 static NSDictionary *ksBtnSpecs(void) {
     return @{
-        @"showSelectAll":  @[@"selection.pin.in.out", @"全"],
-        @"showCut":        @[@"scissors", @"剪"],
-        @"showPaste":      @[@"doc.on.clipboard", @"粘"],
-        @"showClipboard":  @[@"list.clipboard", @"历"],
-        @"showPhrases":    @[@"text.quote", @"语"],
-        @"showCursor":     @[@"arrow.right", @"→"],
-        @"showDismiss":    @[@"keyboard.chevron.compact.down", @"收"],
-        @"showDeleteAll":  @[@"trash", @"清"],
-        @"showQuickAction":@[@"rectangle.stack", @"切"],
-        @"showAI":         @[@"sparkles", @"AI"],
-        @"showWenyan":     @[@"", @"文"],
-        @"showGlobe":      @[@"globe", @"🌐"],
+        @"showSelectAll":  @[@"selection.pin.in.out", @"全", @"全选"],
+        @"showCut":        @[@"scissors", @"剪", @"剪切"],
+        @"showCopy":       @[@"doc.on.doc", @"复", @"复制"],
+        @"showPaste":      @[@"doc.on.clipboard", @"粘", @"粘贴"],
+        @"showClipboard":  @[@"list.clipboard", @"历", @"粘贴板"],
+        @"showPhrases":    @[@"text.quote", @"语", @"短语"],
+        @"showCursor":     @[@"arrow.right", @"→", @"右移"],
+        @"showDismiss":    @[@"keyboard.chevron.compact.down", @"收", @"键盘"],
+        @"showDeleteAll":  @[@"trash", @"清", @"全删"],
+        @"showQuickAction":@[@"rectangle.stack", @"切", @"启动"],
+        @"showAI":         @[@"sparkles", @"AI", @"AI"],
+        @"showWenyan":     @[@"", @"文", @"文言文"],
+        @"showGlobe":      @[@"globe", @"🌐", @"切换"],
     };
 }
 
@@ -154,15 +166,21 @@ static NSDictionary *ksBtnSpecs(void) {
     return self;
 }
 
-- (UIButton *)ksMakeBtn:(NSString *)sf fallback:(NSString *)fb {
+- (UIButton *)ksMakeBtn:(NSString *)sf fallback:(NSString *)fb text:(NSString *)text {
     @try {
         UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:_iconSize
                                                                                           weight:UIImageSymbolWeightRegular];
-        UIImage *img = [UIImage systemImageNamed:sf withConfiguration:cfg];
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        if (img) [b setImage:img forState:UIControlStateNormal];
-        else if (fb.length) [b setTitle:fb forState:UIControlStateNormal];
-        [b setTintColor:[UIColor labelColor]];
+        if (KSInt(@"toolbarStyle", 0) == 1 && text.length) {
+            [b setTitle:text forState:UIControlStateNormal];
+            b.titleLabel.font = [UIFont systemFontOfSize:_iconSize];
+            [b setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
+        } else {
+            UIImage *img = [UIImage systemImageNamed:sf withConfiguration:cfg];
+            if (img) [b setImage:img forState:UIControlStateNormal];
+            else if (fb.length) [b setTitle:fb forState:UIControlStateNormal];
+            [b setTintColor:[UIColor labelColor]];
+        }
         b.contentEdgeInsets = UIEdgeInsetsMake(3, 5, 3, 5); // 与 tweak 同款内边距
         b.userInteractionEnabled = NO; // 预览按钮不响应点击，拖动在整条上
         return b;
@@ -200,10 +218,10 @@ static NSDictionary *ksBtnSpecs(void) {
             if ([k isEqualToString:@"showCursor"]) {
                 if (!KSBool(@"showCursor", YES)) continue;
                 KSPREV_SEP();
-                UIButton *b = [self ksMakeBtn:@"arrow.left" fallback:@"←"];
+                UIButton *b = [self ksMakeBtn:@"arrow.left" fallback:@"←" text:@"左移"];
                 if (b) [_bar addArrangedSubview:b];
                 NSArray *sf_fb = specs[k];
-                b = [self ksMakeBtn:sf_fb[0] fallback:sf_fb[1]];
+                b = [self ksMakeBtn:sf_fb[0] fallback:sf_fb[1] text:sf_fb[2]];
                 if (b) [_bar addArrangedSubview:b];
                 continue;
             }
@@ -217,7 +235,7 @@ static NSDictionary *ksBtnSpecs(void) {
                 KSPREV_SEP();
             }
             NSArray *sf_fb = specs[k];
-            UIButton *b = [self ksMakeBtn:sf_fb[0] fallback:sf_fb[1]];
+            UIButton *b = [self ksMakeBtn:sf_fb[0] fallback:sf_fb[1] text:sf_fb[2]];
             if (b) [_bar addArrangedSubview:b];
         }
 
@@ -257,11 +275,12 @@ static NSDictionary *ksBtnSpecs(void) {
         // 签名含 iconSize + 每个开关独立一位，任何一项变化都触发重建
         CGFloat spacing = KSFloat(@"toolbarSpacing", 4);
         NSString *orderSig = [ksFinalButtonOrder() componentsJoinedByString:@","];
-        NSString *sig = [NSString stringWithFormat:@"%.1f|%.0f|%@|%d%d%d%d%d%d%d%d%d%d%d%d%d",
-            iconSize, spacing, orderSig,
+        NSString *sig = [NSString stringWithFormat:@"%d|%.1f|%.0f|%@|%d%d%d%d%d%d%d%d%d%d%d%d%d%d",
+            KSInt(@"toolbarStyle", 0), iconSize, spacing, orderSig,
             KSBool(@"enabled", YES) && KSBool(@"toolbarEnabled", YES) ? 1 : 0,
             KSBool(@"showSelectAll", YES) ? 1 : 0,
             KSBool(@"showCut", YES) ? 1 : 0,
+            KSBool(@"showCopy", YES) ? 1 : 0,
             KSBool(@"showPaste", YES) ? 1 : 0,
             KSBool(@"showClipboard", YES) ? 1 : 0,
             KSBool(@"showPhrases", YES) ? 1 : 0,
@@ -420,7 +439,7 @@ static NSDictionary *ksBtnSpecs(void) {
     self = [super initWithStyle:UITableViewStyleInsetGrouped];
     if (self) {
         self.title = @"按钮排序";
-        _names = @{@"showSelectAll": @"全选", @"showCut": @"剪切", @"showPaste": @"粘贴",
+        _names = @{@"showSelectAll": @"全选", @"showCut": @"剪切", @"showCopy": @"复制", @"showPaste": @"粘贴",
                    @"showClipboard": @"剪贴板历史", @"showPhrases": @"快捷短语",
                    @"showCursor": @"光标左右移", @"showDismiss": @"收起键盘",
                    @"showDeleteAll": @"全删",
