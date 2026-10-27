@@ -190,9 +190,19 @@ static BOOL ksShouldAutoHide(void) {
     @try {
         UIResponder *fr = ksFindFirstResponder();
         if (!fr) return NO;
+        // Flutter 系应用（闲鱼等）用隐藏的 FlutterTextInputView 做输入桥接来弹系统键盘，
+        // 键盘真实弹出且可用，不属于「游戏自绘键盘盖住系统键盘」场景 → 豁免隐藏/极小尺寸判定
+        // （真机实测：闲鱼 com.taobao.fleamarket 主程序为 Runner.app，工具栏被误 hidden）
+        static Class ksFlutterBridgeCls = nil;
+        static dispatch_once_t ksFlutterOnce;
+        dispatch_once(&ksFlutterOnce, ^{
+            ksFlutterBridgeCls = NSClassFromString(@"FlutterTextInputView");
+            if (!ksFlutterBridgeCls) ksFlutterBridgeCls = NSClassFromString(@"FlutterTextView");
+        });
+        BOOL isFlutterBridge = ksFlutterBridgeCls && [fr isKindOfClass:ksFlutterBridgeCls];
         // 游戏常用招数：拉起键盘的 UITextField 是隐藏/全透明/极小尺寸的（自己画键盘盖上去）
         // 这种场景系统键盘被盖住，工具栏只会从缝隙里漏出来 → 判定为该隐藏
-        if ([fr isKindOfClass:[UIView class]]) {
+        if (!isFlutterBridge && [fr isKindOfClass:[UIView class]]) {
             UIView *v = (UIView *)fr;
             if (v.hidden || v.alpha < 0.05 ||
                 v.bounds.size.width < 10 || v.bounds.size.height < 10) return YES;
